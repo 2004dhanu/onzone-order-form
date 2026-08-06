@@ -33,8 +33,13 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
   final Map<String, int> _subBarcodeQuantities = {};
   String? _scanErrorMessage;
 
+  // Size selection states (UI placeholders)
+  final Set<String> _selectedSingleItemSizes = {};
+  final Map<String, Set<String>> _subBarcodeSelectedSizes = {};
+
   // Added items in current order
   final List<Map<String, dynamic>> _addedItems = [];
+  final FocusNode _barcodeFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -48,6 +53,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
     _mobileController.dispose();
     _remarksController.dispose();
     _barcodeInputController.dispose();
+    _barcodeFocusNode.dispose();
     super.dispose();
   }
 
@@ -73,6 +79,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
   }
 
   void _processBarcode(String barcode) {
+    FocusScope.of(context).unfocus();
     setState(() {
       _searchedSingleItem = null;
       _searchedMultipleItems.clear();
@@ -150,6 +157,9 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
     if (existingIdx != -1) {
       setState(() {
         _addedItems[existingIdx]['fair_order_sub_quantity'] += _searchedSingleQuantity;
+        final currentSizes = _addedItems[existingIdx]['sizes'] as Set<String>? ?? {};
+        currentSizes.addAll(_selectedSingleItemSizes);
+        _addedItems[existingIdx]['sizes'] = currentSizes;
       });
     } else {
       setState(() {
@@ -160,6 +170,8 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
           'fair_order_sub_quantity': _searchedSingleQuantity,
           'fair_order_sub_barcode_type': 'S',
           'stock': stock,
+          'fair_order_sub_dress_type': item['fair_dress_type'],
+          'sizes': Set<String>.from(_selectedSingleItemSizes),
         });
       });
     }
@@ -170,6 +182,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
 
     setState(() {
       _searchedSingleItem = null;
+      _selectedSingleItemSizes.clear();
       _barcodeInputController.clear();
     });
   }
@@ -207,6 +220,9 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
         if (existingIdx != -1) {
           setState(() {
             _addedItems[existingIdx]['fair_order_sub_quantity'] += qty;
+            final currentSizes = _addedItems[existingIdx]['sizes'] as Set<String>? ?? {};
+            currentSizes.addAll(_subBarcodeSelectedSizes[barcode] ?? {});
+            _addedItems[existingIdx]['sizes'] = currentSizes;
           });
         } else {
           setState(() {
@@ -218,6 +234,8 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
               'fair_order_sub_barcode_type': 'M',
               'fair_colour': sub['fair_colour'],
               'stock': sub['stock'] ?? 0,
+              'fair_order_sub_dress_type': sub['fair_dress_type'],
+              'sizes': Set<String>.from(_subBarcodeSelectedSizes[barcode] ?? {}),
             });
           });
         }
@@ -233,6 +251,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
       _searchedMultipleItems.clear();
       _selectedSubBarcodes.clear();
       _subBarcodeQuantities.clear();
+      _subBarcodeSelectedSizes.clear();
       _barcodeInputController.clear();
     });
   }
@@ -263,6 +282,8 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
           'fair_order_sub_mrp': item['fair_order_sub_mrp'],
           'fair_order_sub_quantity': item['fair_order_sub_quantity'],
           'fair_order_sub_barcode_type': item['fair_order_sub_barcode_type'],
+          'fair_order_sub_dress_type': item['fair_order_sub_dress_type'] ?? '',
+          'fair_order_sub_dress_size': (item['sizes'] as Set<String>?)?.join(', ') ?? '',
         }).toList(),
       };
 
@@ -337,13 +358,134 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
   }
 
   Future<void> _startBarcodeScan() async {
-    final scanned = await Navigator.push<String>(
+    FocusScope.of(context).unfocus();
+    final scannedList = await Navigator.push<List<String>>(
       context,
       MaterialPageRoute(builder: (context) => const BarcodeScannerPage()),
     );
 
-    if (scanned != null && scanned.isNotEmpty) {
-      _processBarcode(scanned);
+    if (scannedList != null && scannedList.isNotEmpty) {
+      _addScannedBarcodes(scannedList);
+    }
+  }
+
+  void _addScannedBarcodes(List<String> barcodes) {
+    int addedCount = 0;
+    List<String> notFound = [];
+    List<String> outOfStock = [];
+
+    for (var barcode in barcodes) {
+      final cleaned = barcode.trim();
+      if (cleaned.isEmpty) continue;
+
+      // Find the item matching either full barcode or main barcode
+      final matchedIndex = _localStock.indexWhere((item) =>
+          item['fair_barcode'].toString().toLowerCase() == cleaned.toLowerCase());
+
+      if (matchedIndex == -1) {
+        // Try matching by main style barcode (in case they scanned main code)
+        final mainIdx = _localStock.indexWhere((item) =>
+            item['fair_barcode_main'].toString().toLowerCase() == cleaned.toLowerCase());
+        
+        if (mainIdx == -1) {
+          notFound.add(cleaned);
+          continue;
+        }
+
+        final matchedItem = _localStock[mainIdx];
+        final String type = matchedItem['fair_barcode_type']?.toString().toUpperCase() ?? 'S';
+        if (type == 'M') {
+          // If they scanned main style barcode, launch standard selection popup dialog for this style
+          _processBarcode(cleaned);
+        } else {
+          // Single item matches main style
+          final stock = matchedItem['stock'] ?? 0;
+          if (stock <= 0) {
+            outOfStock.add(cleaned);
+          } else {
+            _addSingleItemToOrderList(matchedItem);
+            addedCount++;
+          }
+        }
+        continue;
+      }
+
+      final matchedItem = _localStock[matchedIndex];
+      final stock = matchedItem['stock'] ?? 0;
+      if (stock <= 0) {
+        outOfStock.add(cleaned);
+        continue;
+      }
+
+      final barcodeVal = matchedItem['fair_barcode']?.toString() ?? '';
+      final type = matchedItem['fair_barcode_type']?.toString().toUpperCase() ?? 'S';
+
+      final existingIdx = _addedItems.indexWhere((element) => element['fair_order_sub_barcode'] == barcodeVal);
+      if (existingIdx != -1) {
+        setState(() {
+          _addedItems[existingIdx]['fair_order_sub_quantity'] += 1;
+        });
+      } else {
+        setState(() {
+          _addedItems.add({
+            'fair_order_sub_barcode_main': matchedItem['fair_barcode_main'],
+            'fair_order_sub_barcode': barcodeVal,
+            'fair_order_sub_mrp': matchedItem['fair_mrp'],
+            'fair_order_sub_quantity': 1,
+            'fair_order_sub_barcode_type': type,
+            'stock': stock,
+            'fair_order_sub_dress_type': matchedItem['fair_dress_type'],
+            'sizes': <String>{},
+          });
+        });
+      }
+      addedCount++;
+    }
+
+    if (addedCount > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Added $addedCount item(s) to order.')),
+      );
+    }
+    if (notFound.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Barcodes not found: ${notFound.join(", ")}'),
+          backgroundColor: Colors.orange.shade800,
+        ),
+      );
+    }
+    if (outOfStock.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Items out of stock: ${outOfStock.join(", ")}'),
+          backgroundColor: Colors.red.shade800,
+        ),
+      );
+    }
+  }
+
+  void _addSingleItemToOrderList(Map<String, dynamic> item) {
+    final barcode = item['fair_barcode']?.toString() ?? '';
+    final stock = item['stock'] ?? 0;
+    final existingIdx = _addedItems.indexWhere((element) => element['fair_order_sub_barcode'] == barcode);
+    if (existingIdx != -1) {
+      setState(() {
+        _addedItems[existingIdx]['fair_order_sub_quantity'] += 1;
+      });
+    } else {
+      setState(() {
+        _addedItems.add({
+          'fair_order_sub_barcode_main': item['fair_barcode_main'],
+          'fair_order_sub_barcode': barcode,
+          'fair_order_sub_mrp': item['fair_mrp'],
+          'fair_order_sub_quantity': 1,
+          'fair_order_sub_barcode_type': 'S',
+          'stock': stock,
+          'fair_order_sub_dress_type': item['fair_dress_type'],
+          'sizes': <String>{},
+        });
+      });
     }
   }
 
@@ -548,6 +690,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
                 children: [
                   Expanded(
                     child: TextField(
+                      focusNode: _barcodeFocusNode,
                       controller: _barcodeInputController,
                       decoration: InputDecoration(
                         hintText: 'Enter barcode number...',
@@ -685,6 +828,84 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
     );
   }
 
+  void _showSizesDialog({
+    required BuildContext context,
+    required String title,
+    required String? dressType,
+    required Set<String> selectedSizes,
+    required Function(VoidCallback) setParentState,
+  }) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            List<String> sizes = ['S', 'M', 'L', 'XL', 'XXL'];
+            if (dressType != null) {
+              final cleanType = dressType.trim().toUpperCase();
+              if (cleanType == 'S') {
+                sizes = ['S-36', 'M-38', 'L-40', 'XL-42', '2XL-44', '3XL-46', '4XL-48', '5XL-50'];
+              } else if (cleanType == 'P') {
+                sizes = ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50'];
+              }
+            }
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Text('Select Sizes - $title', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              content: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: sizes.map((size) {
+                    final isSelected = selectedSizes.contains(size);
+                    return GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          if (isSelected) {
+                            selectedSizes.remove(size);
+                          } else {
+                            selectedSizes.add(size);
+                          }
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isSelected ? AppTheme.primaryColor : Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isSelected ? AppTheme.primaryColor : Colors.grey.shade300,
+                          ),
+                        ),
+                        child: Text(
+                          size,
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.black87,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    setParentState(() {});
+                  },
+                  child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildSingleItemCard() {
     final item = _searchedSingleItem!;
     final stock = item['stock'] ?? 0;
@@ -755,6 +976,41 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
                 ),
               ],
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: isOutOfStock
+                    ? null
+                    : () {
+                        _showSizesDialog(
+                          context: context,
+                          title: item['fair_barcode'] ?? '',
+                          dressType: item['fair_dress_type'],
+                          selectedSizes: _selectedSingleItemSizes,
+                          setParentState: (fn) {
+                            setState(fn);
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              _barcodeFocusNode.unfocus();
+                            });
+                          },
+                        );
+                      },
+                icon: const Icon(Icons.checkroom, size: 16),
+                label: Text(
+                  _selectedSingleItemSizes.isEmpty
+                      ? 'Select Sizes'
+                      : 'Sizes: ${_selectedSingleItemSizes.join(", ")}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primaryColor,
+                  side: const BorderSide(color: AppTheme.primaryColor),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
             ),
             const Divider(height: 24),
             Row(
@@ -908,7 +1164,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
                           crossAxisCount: 2,
                           crossAxisSpacing: 12,
                           mainAxisSpacing: 12,
-                          childAspectRatio: 0.8,
+                          childAspectRatio: 0.74,
                         ),
                         itemCount: _searchedMultipleItems.length,
                         itemBuilder: (context, index) {
@@ -919,14 +1175,15 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
                           final stock = sub['stock'] ?? 0;
                           final isOutOfStock = stock <= 0;
                           final color = sub['fair_colour'] != null ? 'Col: ${sub['fair_colour']}' : 'No Color';
+                          final selectedSizes = _subBarcodeSelectedSizes[barcode] ?? {};
 
                           return Card(
                             elevation: isSelected ? 3 : 0.5,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                               side: BorderSide(
-                                color: isSelected ? primaryColor : Colors.grey.shade200,
-                                width: isSelected ? 2 : 1,
+                                  color: isSelected ? primaryColor : Colors.grey.shade200,
+                                  width: isSelected ? 2 : 1,
                               ),
                             ),
                             child: Padding(
@@ -973,6 +1230,41 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
                                       fontSize: 11,
                                       color: isOutOfStock ? Colors.red.shade700 : Colors.blue.shade800,
                                       fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: OutlinedButton.icon(
+                                      onPressed: isOutOfStock
+                                          ? null
+                                          : () {
+                                              _showSizesDialog(
+                                                context: context,
+                                                title: barcode,
+                                                dressType: sub['fair_dress_type'],
+                                                selectedSizes: selectedSizes,
+                                                setParentState: (fn) {
+                                                  setPopupState(fn);
+                                                  _subBarcodeSelectedSizes[barcode] = selectedSizes;
+                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                                    _barcodeFocusNode.unfocus();
+                                                  });
+                                                },
+                                              );
+                                            },
+                                      icon: const Icon(Icons.checkroom, size: 12),
+                                      label: Text(
+                                        selectedSizes.isEmpty ? 'Select Sizes' : 'Sizes (${selectedSizes.length})',
+                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                      ),
+                                      style: OutlinedButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        minimumSize: const Size(0, 28),
+                                        foregroundColor: primaryColor,
+                                        side: BorderSide(color: primaryColor.withValues(alpha: 0.5)),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                      ),
                                     ),
                                   ),
                                   const Spacer(),
@@ -1090,136 +1382,195 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
         final isMultiple = item['fair_order_sub_barcode_type'] == 'M';
 
         return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.grey.shade100, width: 1),
+            border: Border.all(color: Colors.grey.shade200, width: 1),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.01),
-                blurRadius: 10,
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
             ],
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-            child: Row(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Icon Avatar
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: isMultiple ? Colors.purple.shade50 : Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    isMultiple ? Icons.grid_view : Icons.sell,
-                    color: isMultiple ? Colors.purple.shade700 : Colors.blue.shade700,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 14),
-
-                // Barcode details
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item['fair_order_sub_barcode'],
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'MRP: ₹${item['fair_order_sub_mrp'] ?? 'N/A'} | Style: ${item['fair_order_sub_barcode_main']}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey.shade600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-
-                // Controls row
+                // Top Row: Avatar, Barcode, Style/MRP, Delete Button
                 Row(
-                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Minus Button
-                    GestureDetector(
-                      onTap: () {
-                        final currentQty = item['fair_order_sub_quantity'] as int;
-                        if (currentQty > 1) {
-                          setState(() {
-                            item['fair_order_sub_quantity'] = currentQty - 1;
-                          });
-                        } else {
-                          setState(() {
-                            _addedItems.removeAt(index);
-                          });
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.grey.shade50,
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: const Icon(Icons.remove, size: 14, color: Colors.black87),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isMultiple ? Colors.purple.shade50 : Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        isMultiple ? Icons.grid_view : Icons.sell,
+                        color: isMultiple ? Colors.purple.shade700 : Colors.blue.shade700,
+                        size: 20,
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: SizedBox(
-                        width: 24,
-                        child: Text(
-                          '${item['fair_order_sub_quantity']}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 14,
-                            color: Colors.black87,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item['fair_order_sub_barcode'],
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Colors.black87,
+                            ),
                           ),
-                          textAlign: TextAlign.center,
-                        ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'MRP: ₹${item['fair_order_sub_mrp'] ?? 'N/A'} | Style: ${item['fair_order_sub_barcode_main']}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade600,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    // Plus Button
-                    GestureDetector(
-                      onTap: () {
-                        final currentQty = item['fair_order_sub_quantity'] as int;
-                        setState(() {
-                          item['fair_order_sub_quantity'] = currentQty + 1;
-                        });
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.grey.shade50,
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: const Icon(Icons.add, size: 14, color: Colors.black87),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Trash Delete Button
                     IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red, size: 20),
+                      icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
                       onPressed: () {
                         setState(() {
                           _addedItems.removeAt(index);
                         });
                       },
+                    ),
+                  ],
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12.0),
+                  child: Divider(height: 1, thickness: 1),
+                ),
+                // Bottom Row: Sizes Selector and Quantity Stepper
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Sizes Selector
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () {
+                          final Set<String> currentSizes = Set<String>.from(item['sizes'] ?? {});
+                          _showSizesDialog(
+                            context: context,
+                            title: item['fair_order_sub_barcode'],
+                            dressType: item['fair_order_sub_dress_type'],
+                            selectedSizes: currentSizes,
+                            setParentState: (fn) {
+                              setState(() {
+                                fn();
+                                item['sizes'] = currentSizes;
+                              });
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                _barcodeFocusNode.unfocus();
+                              });
+                            },
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey.shade200),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.checkroom, size: 14, color: Colors.black54),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  (item['sizes'] as Set<String>?) == null || (item['sizes'] as Set<String>).isEmpty
+                                      ? 'Select Sizes'
+                                      : 'Sizes: ${(item['sizes'] as Set<String>).join(", ")}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black54,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    // Quantity Stepper
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: () {
+                            final currentQty = item['fair_order_sub_quantity'] as int;
+                            if (currentQty > 1) {
+                              setState(() {
+                                item['fair_order_sub_quantity'] = currentQty - 1;
+                              });
+                            } else {
+                              setState(() {
+                                _addedItems.removeAt(index);
+                              });
+                            }
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.grey.shade100,
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: const Icon(Icons.remove, size: 14, color: Colors.black87),
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: SizedBox(
+                            width: 24,
+                            child: Text(
+                              '${item['fair_order_sub_quantity']}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                                color: Colors.black87,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            final currentQty = item['fair_order_sub_quantity'] as int;
+                            setState(() {
+                              item['fair_order_sub_quantity'] = currentQty + 1;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.grey.shade100,
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: const Icon(Icons.add, size: 14, color: Colors.black87),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
