@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 class BarcodeScannerPage extends StatefulWidget {
@@ -10,7 +11,11 @@ class BarcodeScannerPage extends StatefulWidget {
 
 class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   final MobileScannerController controller = MobileScannerController();
-  bool _isScanCompleted = false; // Flag to prevent multiple pops
+  final List<String> _scannedBarcodes = [];
+  final Map<String, DateTime> _lastScannedTimes = {};
+
+  // Flashlight and camera state
+  bool _isTorchOn = false;
 
   @override
   void dispose() {
@@ -18,28 +23,226 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
     super.dispose();
   }
 
+  void _onBarcodeDetected(String barcode) {
+    final cleaned = barcode.trim();
+    if (cleaned.isEmpty) return;
+
+    final now = DateTime.now();
+    final lastTime = _lastScannedTimes[cleaned];
+
+    // Throttle duplicate scans of the exact same barcode for 1.5 seconds
+    if (lastTime != null && now.difference(lastTime).inMilliseconds < 1500) {
+      return;
+    }
+
+    _lastScannedTimes[cleaned] = now;
+
+    // Trigger haptic feedback
+    HapticFeedback.lightImpact();
+
+    setState(() {
+      _scannedBarcodes.add(cleaned);
+    });
+
+    // Show a temporary Toast/SnackBar overlay
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Scanned: $cleaned'),
+        duration: const Duration(milliseconds: 600),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Scan Barcode', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        backgroundColor: Theme.of(context).primaryColor,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: MobileScanner(
-        controller: controller,
-        onDetect: (capture) {
-          if (_isScanCompleted) return; // Prevent multiple invocations
+    final primaryColor = Theme.of(context).primaryColor;
 
-          final List<Barcode> barcodes = capture.barcodes;
-          if (barcodes.isNotEmpty) {
-            final barcode = barcodes.first;
-            if (barcode.rawValue != null) {
-              _isScanCompleted = true; // Lock scanning
-              Navigator.pop(context, barcode.rawValue);
-            }
-          }
-        },
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('Continuous Scan', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.black87,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            icon: Icon(_isTorchOn ? Icons.flash_on : Icons.flash_off, color: Colors.white),
+            onPressed: () {
+              controller.toggleTorch();
+              setState(() {
+                _isTorchOn = !_isTorchOn;
+              });
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.switch_camera, color: Colors.white),
+            onPressed: () => controller.switchCamera(),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // 1. Camera scanner viewport
+          Expanded(
+            flex: 5,
+            child: Stack(
+              children: [
+                MobileScanner(
+                  controller: controller,
+                  onDetect: (capture) {
+                    final List<Barcode> barcodes = capture.barcodes;
+                    if (barcodes.isNotEmpty) {
+                      final barcode = barcodes.first;
+                      if (barcode.rawValue != null) {
+                        _onBarcodeDetected(barcode.rawValue!);
+                      }
+                    }
+                  },
+                ),
+                // Scanner viewfinder guide overlay
+                Center(
+                  child: Container(
+                    width: 260,
+                    height: 180,
+                    decoration: BoxDecoration(
+                      border: Border.all(color: primaryColor, width: 2),
+                      borderRadius: BorderRadius.circular(16),
+                      color: Colors.transparent,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 2. Scanned items list and action panel
+          Expanded(
+            flex: 3,
+            child: Container(
+              width: double.infinity,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(24),
+                  topRight: Radius.circular(24),
+                ),
+              ),
+              child: Column(
+                children: [
+                  // Panel Header
+                  Padding(
+                    padding: const EdgeInsets.only(left: 20, right: 20, top: 16, bottom: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Scanned Barcodes (${_scannedBarcodes.length})',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87),
+                        ),
+                        if (_scannedBarcodes.isNotEmpty)
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _scannedBarcodes.clear();
+                              });
+                            },
+                            child: Text(
+                              'Clear All',
+                              style: TextStyle(color: Colors.red.shade600, fontWeight: FontWeight.bold, fontSize: 13),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+
+                  // Scanned Chips View
+                  Expanded(
+                    child: _scannedBarcodes.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.qr_code_scanner, color: Colors.grey.shade300, size: 40),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Aim camera at barcodes to scan',
+                                  style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            itemCount: _scannedBarcodes.length,
+                            itemBuilder: (context, index) {
+                              final barcode = _scannedBarcodes[index];
+                              return Card(
+                                elevation: 0,
+                                color: Colors.grey.shade50,
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  side: BorderSide(color: Colors.grey.shade100),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(Icons.inventory, size: 16, color: primaryColor.withValues(alpha: 0.8)),
+                                          const SizedBox(width: 10),
+                                          Text(
+                                            barcode,
+                                            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87),
+                                          ),
+                                        ],
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.remove_circle, color: Colors.redAccent, size: 20),
+                                        onPressed: () {
+                                          setState(() {
+                                            _scannedBarcodes.removeAt(index);
+                                          });
+                                        },
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+
+                  // Confirm button
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: ElevatedButton(
+                      onPressed: _scannedBarcodes.isEmpty
+                          ? null
+                          : () {
+                              Navigator.pop(context, _scannedBarcodes);
+                            },
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 50),
+                        backgroundColor: primaryColor,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        'Add Scanned Barcodes (${_scannedBarcodes.length})',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
