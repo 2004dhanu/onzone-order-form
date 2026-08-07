@@ -143,7 +143,7 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
     final data = _orderData!;
     final isCompleted = data['fair_order_status']?.toString().toLowerCase() == 'completed' ||
                         data['fair_order_status']?.toString() == '1';
-    final accentColor = isCompleted ? Colors.green : Colors.orange;
+    final accentColor = isCompleted ? Colors.green : const Color(0xFF202C4D);
 
     return Container(
       decoration: BoxDecoration(
@@ -257,6 +257,14 @@ class _OrderDetailsPageState extends State<OrderDetailsPage> {
                       Expanded(child: _buildInfoGridItem(Icons.rate_review, 'Remarks', data['fair_order_remarks'])),
                   ],
                 ),
+                if (data['fair_order_gst_no'] != null && data['fair_order_gst_no'].toString().trim().isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(child: _buildInfoGridItem(Icons.receipt, 'GST No', data['fair_order_gst_no'].toString())),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
