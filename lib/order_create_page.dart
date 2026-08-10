@@ -42,6 +42,7 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
   // Added items in current order
   final List<Map<String, dynamic>> _addedItems = [];
   final FocusNode _barcodeFocusNode = FocusNode();
+  DateTime? _deliveryDate;
   
   // Global size selection states
   final Set<String> _globalSelectedShirtSizes = {};
@@ -299,11 +300,16 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token');
 
+      final deliveryDateObj = _deliveryDate ?? DateTime.now();
+      final formattedDeliveryDate =
+          "${deliveryDateObj.year}-${deliveryDateObj.month.toString().padLeft(2, '0')}-${deliveryDateObj.day.toString().padLeft(2, '0')}";
+
       final payload = {
         'fair_order_retailer': _retailerController.text.trim(),
         'fair_order_retailer_mobile': _mobileController.text.trim(),
         'fair_order_remarks': _remarksController.text.trim(),
         'fair_order_gst_no': _gstController.text.trim(),
+        'fair_order_delivery_date': formattedDeliveryDate,
         'subs': _addedItems.map((item) => {
           'fair_order_sub_barcode_main': item['fair_order_sub_barcode_main'],
           'fair_order_sub_barcode': item['fair_order_sub_barcode'],
@@ -869,6 +875,41 @@ class _OrderCreatePageState extends State<OrderCreatePage> {
                       ),
                     ),
                     if (_addedItems.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: () async {
+                          final DateTime? picked = await showDatePicker(
+                            context: context,
+                            initialDate: _deliveryDate ?? DateTime.now(),
+                            firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                            lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
+                            builder: (context, child) {
+                              return Theme(
+                                data: Theme.of(context).copyWith(
+                                  colorScheme: ColorScheme.light(
+                                    primary: AppTheme.primaryColor,
+                                    onPrimary: Colors.white,
+                                    onSurface: Colors.black87,
+                                  ),
+                                ),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              _deliveryDate = picked;
+                            });
+                          }
+                        },
+                        icon: Icon(
+                          Icons.local_shipping,
+                          color: _deliveryDate != null ? AppTheme.primaryColor : Colors.grey.shade600,
+                        ),
+                        tooltip: _deliveryDate != null
+                            ? 'Delivery: ${_deliveryDate!.year}-${_deliveryDate!.month.toString().padLeft(2, '0')}-${_deliveryDate!.day.toString().padLeft(2, '0')}'
+                            : 'Set Delivery Date',
+                      ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
                         onPressed: _showGlobalSizesDialog,

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:onzone/order_pdf_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'app_theme.dart';
@@ -22,6 +23,7 @@ class _HomePageState extends State<HomePage> {
   
   List<dynamic> _orders = [];
   bool _isLoadingOrders = true;
+dynamic _downloadingId;
 
   @override
   void initState() {
@@ -102,7 +104,14 @@ class _HomePageState extends State<HomePage> {
       );
     }
   }
-
+ Future<void> _downloadPdf(dynamic id) async {
+    setState(() => _downloadingId = id);
+    try {
+      await downloadOrderPdf(context, id);
+    } finally {
+      if (mounted) setState(() => _downloadingId = null);
+    }
+  }
   int get _pendingCount => _orders.where((order) => order['fair_order_status'] != 1).length;
   int get _completedCount => _orders.where((order) => order['fair_order_status'] == 1).length;
 
@@ -395,6 +404,7 @@ class _HomePageState extends State<HomePage> {
                                         const SizedBox(width: 16),
                                         
                                         // Right Side Info
+                                       // Right Side Info
                                         Column(
                                           crossAxisAlignment: CrossAxisAlignment.end,
                                           children: [
@@ -414,6 +424,37 @@ class _HomePageState extends State<HomePage> {
                                                 color: Colors.grey.shade500,
                                               ),
                                             ),
+                                            const SizedBox(height: 8),
+                                            _downloadingId == order['id']
+                                                ? const SizedBox(
+                                                    width: 30,
+                                                    height: 30,
+                                                    child: Padding(
+                                                      padding: EdgeInsets.all(7),
+                                                      child: CircularProgressIndicator(
+                                                        strokeWidth: 2,
+                                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                                            AppTheme.primaryColor),
+                                                      ),
+                                                    ),
+                                                  )
+                                                : InkWell(
+                                                    borderRadius: BorderRadius.circular(20),
+                                                    onTap: () => _downloadPdf(order['id']),
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(7),
+                                                      decoration: BoxDecoration(
+                                                        color: AppTheme.primaryColor
+                                                            .withValues(alpha: 0.08),
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                      child: const Icon(
+                                                        Icons.download_rounded,
+                                                        size: 16,
+                                                        color: AppTheme.primaryColor,
+                                                      ),
+                                                    ),
+                                                  ),
                                           ],
                                         ),
                                       ],
