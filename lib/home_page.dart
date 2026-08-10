@@ -246,7 +246,7 @@ class _HomePageState extends State<HomePage> {
                             title: 'Pending Orders',
                             value: '$_pendingCount',
                             icon: Icons.pending_actions,
-                            color: Colors.orange,
+                            color: const Color(0xFF202C4D),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -320,12 +320,12 @@ class _HomePageState extends State<HomePage> {
                                         Container(
                                           padding: const EdgeInsets.all(12),
                                           decoration: BoxDecoration(
-                                            color: isCompleted ? Colors.green.shade50 : Colors.orange.shade50,
+                                            color: isCompleted ? Colors.green.shade50 : const Color(0xFF202C4D).withValues(alpha: 0.1),
                                             shape: BoxShape.circle,
                                           ),
                                           child: Icon(
                                             isCompleted ? Icons.check_circle_outline : Icons.pending_outlined,
-                                            color: isCompleted ? Colors.green.shade700 : Colors.orange.shade700,
+                                            color: isCompleted ? Colors.green.shade700 : const Color(0xFF202C4D),
                                             size: 24,
                                           ),
                                         ),

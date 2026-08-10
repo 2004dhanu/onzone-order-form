@@ -13,6 +13,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   final MobileScannerController controller = MobileScannerController();
   final List<String> _scannedBarcodes = [];
   final Map<String, DateTime> _lastScannedTimes = {};
+  String? _latestDetectedBarcode;
 
   // Flashlight and camera state
   bool _isTorchOn = false;
@@ -21,6 +22,23 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
   void dispose() {
     controller.dispose();
     super.dispose();
+  }
+
+  void _captureBarcode() {
+    if (_latestDetectedBarcode != null) {
+      _onBarcodeDetected(_latestDetectedBarcode!);
+      setState(() {
+        _latestDetectedBarcode = null; // Clear focus after scanning
+      });
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please align a barcode in the viewfinder first.'),
+          duration: Duration(milliseconds: 1000),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _onBarcodeDetected(String barcode) {
@@ -94,7 +112,9 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                     if (barcodes.isNotEmpty) {
                       final barcode = barcodes.first;
                       if (barcode.rawValue != null) {
-                        _onBarcodeDetected(barcode.rawValue!);
+                        setState(() {
+                          _latestDetectedBarcode = barcode.rawValue!;
+                        });
                       }
                     }
                   },
@@ -105,9 +125,74 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                     width: 260,
                     height: 180,
                     decoration: BoxDecoration(
-                      border: Border.all(color: primaryColor, width: 2),
+                      border: Border.all(
+                        color: _latestDetectedBarcode != null ? Colors.green : primaryColor,
+                        width: 2,
+                      ),
                       borderRadius: BorderRadius.circular(16),
                       color: Colors.transparent,
+                    ),
+                  ),
+                ),
+                // Capture Barcode Button and Status Banner
+                Positioned(
+                  bottom: 24,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Visual feedback status banner
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            _latestDetectedBarcode != null
+                                ? 'Ready: $_latestDetectedBarcode'
+                                : 'Align barcode in box',
+                            style: TextStyle(
+                              color: _latestDetectedBarcode != null ? Colors.green.shade400 : Colors.white70,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        // Shutter button for capture
+                        GestureDetector(
+                          onTap: _captureBarcode,
+                          child: Container(
+                            width: 72,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: Colors.white.withValues(alpha: 0.9),
+                              border: Border.all(
+                                color: _latestDetectedBarcode != null ? Colors.green : Colors.grey.shade400,
+                                width: 4,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: (_latestDetectedBarcode != null ? Colors.green : Colors.black).withValues(alpha: 0.2),
+                                  blurRadius: 10,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.qr_code_scanner,
+                                color: _latestDetectedBarcode != null ? Colors.green.shade700 : Colors.grey.shade600,
+                                size: 32,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -166,7 +251,7 @@ class _BarcodeScannerPageState extends State<BarcodeScannerPage> {
                                 Icon(Icons.qr_code_scanner, color: Colors.grey.shade300, size: 40),
                                 const SizedBox(height: 8),
                                 Text(
-                                  'Aim camera at barcodes to scan',
+                                  'Aim at a barcode, then tap the Scan button',
                                   style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
                                 ),
                               ],

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  static const Color primaryColor = Color(0xFFFF6B00); // Premium modern orange
+  static const Color primaryColor = Color(0xFF202C4D); // Premium dark navy
   
   static const List<Color> gradientColors = [
-    Color(0xFFFF9E80),
-    Color(0xFFFF3D00),
+    Color(0xFF3A4A6B),
+    Color(0xFF202C4D),
   ];
   
   static const Color scaffoldBackgroundColor = Color(0xFFFAFAFA);
@@ -16,7 +16,7 @@ class AppTheme {
     colorScheme: ColorScheme.fromSeed(
       seedColor: primaryColor,
       primary: primaryColor,
-      secondary: const Color(0xFFFF3D00),
+      secondary: const Color(0xFF202C4D),
       surface: scaffoldBackgroundColor,
     ),
     useMaterial3: true,

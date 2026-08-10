@@ -19,6 +19,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
   late TextEditingController _retailerController;
   late TextEditingController _mobileController;
   late TextEditingController _remarksController;
+  late TextEditingController _gstController;
   final TextEditingController _barcodeInputController = TextEditingController();
 
   int _currentStep = 0;
@@ -41,6 +42,11 @@ class _OrderEditPageState extends State<OrderEditPage> {
   // Added items in current order
   final List<Map<String, dynamic>> _addedItems = [];
   final FocusNode _barcodeFocusNode = FocusNode();
+  
+  // Global size selection states
+  final Set<String> _globalSelectedShirtSizes = {};
+  final Set<String> _globalSelectedPantSizes = {};
+  final Set<String> _selectedOrderBarcodes = {};
 
   @override
   void initState() {
@@ -48,6 +54,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
     _retailerController = TextEditingController(text: widget.orderData['fair_order_retailer']);
     _mobileController = TextEditingController(text: widget.orderData['fair_order_retailer_mobile']);
     _remarksController = TextEditingController(text: widget.orderData['fair_order_remarks'] ?? '');
+    _gstController = TextEditingController(text: widget.orderData['fair_order_gst_no'] ?? '');
     _loadLocalStockAndPrepopulate();
   }
 
@@ -56,6 +63,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
     _retailerController.dispose();
     _mobileController.dispose();
     _remarksController.dispose();
+    _gstController.dispose();
     _barcodeInputController.dispose();
     _barcodeFocusNode.dispose();
     super.dispose();
@@ -187,12 +195,20 @@ class _OrderEditPageState extends State<OrderEditPage> {
     // Check if already exists in order, if so update quantity
     final existingIdx = _addedItems.indexWhere((element) => element['fair_order_sub_barcode'] == barcode);
     if (existingIdx != -1) {
-      setState(() {
-        _addedItems[existingIdx]['fair_order_sub_quantity'] += _searchedSingleQuantity;
-        final currentSizes = _addedItems[existingIdx]['sizes'] as Set<String>? ?? {};
-        currentSizes.addAll(_selectedSingleItemSizes);
-        _addedItems[existingIdx]['sizes'] = currentSizes;
-      });
+      final currentQty = _addedItems[existingIdx]['fair_order_sub_quantity'] as int;
+      if (currentQty + _searchedSingleQuantity <= stock) {
+        setState(() {
+          _addedItems[existingIdx]['fair_order_sub_quantity'] += _searchedSingleQuantity;
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cannot add: Total quantity will exceed available stock of $stock'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
     } else {
       setState(() {
         _addedItems.add({
@@ -204,7 +220,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
           'fair_order_sub_barcode_type': 'S',
           'stock': stock,
           'fair_order_sub_dress_type': item['fair_dress_type'],
-          'sizes': Set<String>.from(_selectedSingleItemSizes),
+          'sizes': <String>{},
         });
       });
     }
@@ -251,12 +267,24 @@ class _OrderEditPageState extends State<OrderEditPage> {
         
         final existingIdx = _addedItems.indexWhere((element) => element['fair_order_sub_barcode'] == barcode);
         if (existingIdx != -1) {
-          setState(() {
-            _addedItems[existingIdx]['fair_order_sub_quantity'] += qty;
-            final currentSizes = _addedItems[existingIdx]['sizes'] as Set<String>? ?? {};
-            currentSizes.addAll(_subBarcodeSelectedSizes[barcode] ?? {});
-            _addedItems[existingIdx]['sizes'] = currentSizes;
-          });
+          final currentQty = _addedItems[existingIdx]['fair_order_sub_quantity'] as int;
+          final stock = sub['stock'] ?? 0;
+          if (currentQty + qty <= stock) {
+            setState(() {
+              _addedItems[existingIdx]['fair_order_sub_quantity'] += qty;
+              final currentSizes = _addedItems[existingIdx]['sizes'] as Set<String>? ?? {};
+              currentSizes.addAll(_subBarcodeSelectedSizes[barcode] ?? {});
+              _addedItems[existingIdx]['sizes'] = currentSizes;
+            });
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Cannot add $barcode: Total quantity will exceed available stock of $stock'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+            return;
+          }
         } else {
           setState(() {
             _addedItems.add({
@@ -299,6 +327,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
 
     final item = _addedItems[index];
     final subId = item['id'];
+    final barcode = item['fair_order_sub_barcode']?.toString() ?? '';
 
     if (subId != null) {
       // Item is saved in database, we must hit the delete API
@@ -341,6 +370,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
 
         if (response.statusCode == 200 || response.statusCode == 204) {
           setState(() {
+            _selectedOrderBarcodes.remove(barcode);
             _addedItems.removeAt(index);
           });
           if (mounted) {
@@ -374,6 +404,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
     } else {
       // Unsaved item, just remove locally
       setState(() {
+        _selectedOrderBarcodes.remove(barcode);
         _addedItems.removeAt(index);
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -403,6 +434,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
         'fair_order_retailer': _retailerController.text.trim(),
         'fair_order_retailer_mobile': _mobileController.text.trim(),
         'fair_order_remarks': _remarksController.text.trim(),
+        'fair_order_gst_no': _gstController.text.trim(),
         'subs': _addedItems.map((item) => {
           'id': item['id'],
           'fair_order_sub_barcode_main': item['fair_order_sub_barcode_main'],
@@ -550,9 +582,15 @@ class _OrderEditPageState extends State<OrderEditPage> {
 
       final existingIdx = _addedItems.indexWhere((element) => element['fair_order_sub_barcode'] == barcodeVal);
       if (existingIdx != -1) {
-        setState(() {
-          _addedItems[existingIdx]['fair_order_sub_quantity'] += 1;
-        });
+        final currentQty = _addedItems[existingIdx]['fair_order_sub_quantity'] as int;
+        if (currentQty < stock) {
+          setState(() {
+            _addedItems[existingIdx]['fair_order_sub_quantity'] += 1;
+          });
+          addedCount++;
+        } else {
+          outOfStock.add(cleaned);
+        }
       } else {
         setState(() {
           _addedItems.add({
@@ -580,7 +618,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Barcodes not found: ${notFound.join(", ")}'),
-          backgroundColor: Colors.orange.shade800,
+          backgroundColor: const Color(0xFF202C4D),
         ),
       );
     }
@@ -599,9 +637,19 @@ class _OrderEditPageState extends State<OrderEditPage> {
     final stock = item['stock'] ?? 0;
     final existingIdx = _addedItems.indexWhere((element) => element['fair_order_sub_barcode'] == barcode);
     if (existingIdx != -1) {
-      setState(() {
-        _addedItems[existingIdx]['fair_order_sub_quantity'] += 1;
-      });
+      final currentQty = _addedItems[existingIdx]['fair_order_sub_quantity'] as int;
+      if (currentQty < stock) {
+        setState(() {
+          _addedItems[existingIdx]['fair_order_sub_quantity'] += 1;
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cannot add: Total quantity will exceed available stock of $stock'),
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
     } else {
       setState(() {
         _addedItems.add({
@@ -779,6 +827,17 @@ class _OrderEditPageState extends State<OrderEditPage> {
             ),
             const SizedBox(height: 20),
 
+            // GST Number
+            TextFormField(
+              controller: _gstController,
+              decoration: InputDecoration(
+                labelText: 'GST Number (Optional)',
+                prefixIcon: const Icon(Icons.receipt, color: AppTheme.primaryColor),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 20),
+
             // Remarks
             TextFormField(
               controller: _remarksController,
@@ -924,33 +983,58 @@ class _OrderEditPageState extends State<OrderEditPage> {
           child: Row(
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
+                child: Row(
                   children: [
-                    Text(
-                      _retailerController.text,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _retailerController.text,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${_addedItems.length} unique barcode(s) added',
+                            style: const TextStyle(color: Colors.grey, fontSize: 11),
+                          ),
+                        ],
+                      ),
                     ),
-                    Text(
-                      '${_addedItems.length} unique barcode(s) added',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
+                    if (_addedItems.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: _showGlobalSizesDialog,
+                        icon: const Icon(Icons.checkroom, size: 14),
+                        label: Text(
+                          _selectedOrderBarcodes.isEmpty
+                              ? 'Select Sizes'
+                              : 'Sizes (${_selectedOrderBarcodes.length})',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          foregroundColor: AppTheme.primaryColor,
+                          side: const BorderSide(color: AppTheme.primaryColor),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               ElevatedButton(
                 onPressed: _addedItems.isEmpty ? null : _updateOrder,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                child: const Text('Update Order', style: TextStyle(fontWeight: FontWeight.bold)),
+                child: const Text('Update Order', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
               ),
             ],
           ),
@@ -977,7 +1061,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
               if (cleanType == 'S') {
                 sizes = ['S-36', 'M-38', 'L-40', 'XL-42', '2XL-44', '3XL-46', '4XL-48', '5XL-50'];
               } else if (cleanType == 'P') {
-                sizes = ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45', '46', '47', '48', '49', '50'];
+                sizes = ['28', '30', '32', '34', '36', '38', '40', '42', '44'];
               }
             }
 
@@ -1026,6 +1110,156 @@ class _OrderEditPageState extends State<OrderEditPage> {
                   onPressed: () {
                     Navigator.pop(context);
                     setParentState(() {});
+                  },
+                  child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showGlobalSizesDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final List<String> shirtSizes = ['S-36', 'M-38', 'L-40', 'XL-42', '2XL-44', '3XL-46', '4XL-48', '5XL-50'];
+            final List<String> pantSizes = ['28', '30', '32', '34', '36', '38', '40', '42', '44'];
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('Global Size Selection', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Shirt Sizes (S)',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87, fontSize: 13),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: shirtSizes.map((size) {
+                          final isSelected = _globalSelectedShirtSizes.contains(size);
+                          return GestureDetector(
+                            onTap: () {
+                              setDialogState(() {
+                                if (isSelected) {
+                                  _globalSelectedShirtSizes.remove(size);
+                                } else {
+                                  _globalSelectedShirtSizes.add(size);
+                                }
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: isSelected ? AppTheme.primaryColor : Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isSelected ? AppTheme.primaryColor : Colors.grey.shade300,
+                                ),
+                              ),
+                              child: Text(
+                                size,
+                                style: TextStyle(
+                                  color: isSelected ? Colors.white : Colors.black87,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                      const Divider(height: 24),
+                      const Text(
+                        'Pant Sizes (P)',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black87, fontSize: 13),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: pantSizes.map((size) {
+                          final isSelected = _globalSelectedPantSizes.contains(size);
+                          return GestureDetector(
+                            onTap: () {
+                              setDialogState(() {
+                                if (isSelected) {
+                                  _globalSelectedPantSizes.remove(size);
+                                } else {
+                                  _globalSelectedPantSizes.add(size);
+                                }
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: isSelected ? AppTheme.primaryColor : Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: isSelected ? AppTheme.primaryColor : Colors.grey.shade300,
+                                ),
+                              ),
+                              child: Text(
+                                size,
+                                style: TextStyle(
+                                  color: isSelected ? Colors.white : Colors.black87,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                  },
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      // Apply sizes to target items
+                      final targets = _selectedOrderBarcodes.isNotEmpty
+                          ? _addedItems.where((item) => _selectedOrderBarcodes.contains(item['fair_order_sub_barcode']))
+                          : _addedItems;
+
+                      for (var item in targets) {
+                        final dressType = item['fair_order_sub_dress_type']?.toString().trim().toUpperCase() ?? '';
+                        if (dressType == 'S') {
+                          item['sizes'] = Set<String>.from(_globalSelectedShirtSizes);
+                        } else if (dressType == 'P') {
+                          item['sizes'] = Set<String>.from(_globalSelectedPantSizes);
+                        }
+                      }
+                      
+                      // Clear selected cards and global sets
+                      _selectedOrderBarcodes.clear();
+                      _globalSelectedShirtSizes.clear();
+                      _globalSelectedPantSizes.clear();
+                    });
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Selected sizes applied successfully.')),
+                    );
                   },
                   child: const Text('OK', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
@@ -1108,42 +1342,7 @@ class _OrderEditPageState extends State<OrderEditPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: isOutOfStock
-                    ? null
-                    : () {
-                        _showSizesDialog(
-                          context: context,
-                          title: item['fair_barcode'] ?? '',
-                          dressType: item['fair_dress_type'],
-                          selectedSizes: _selectedSingleItemSizes,
-                          setParentState: (fn) {
-                            setState(fn);
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              _barcodeFocusNode.unfocus();
-                            });
-                          },
-                        );
-                      },
-                icon: const Icon(Icons.checkroom, size: 16),
-                label: Text(
-                  _selectedSingleItemSizes.isEmpty
-                      ? 'Select Sizes'
-                      : 'Sizes: ${_selectedSingleItemSizes.join(", ")}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.primaryColor,
-                  side: const BorderSide(color: AppTheme.primaryColor),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-              ),
-            ),
-            const Divider(height: 24),
+
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -1192,9 +1391,18 @@ class _OrderEditPageState extends State<OrderEditPage> {
                       onTap: isOutOfStock
                           ? null
                           : () {
-                              setState(() {
-                                _searchedSingleQuantity++;
-                              });
+                              if (_searchedSingleQuantity < stock) {
+                                setState(() {
+                                  _searchedSingleQuantity++;
+                                });
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Cannot exceed available stock of $stock'),
+                                    duration: const Duration(seconds: 1),
+                                  ),
+                                );
+                              }
                             },
                       child: Container(
                         padding: const EdgeInsets.all(8),
@@ -1289,178 +1497,198 @@ class _OrderEditPageState extends State<OrderEditPage> {
                     ),
                     const Divider(height: 1),
                     Expanded(
-                      child: GridView.builder(
-                        padding: const EdgeInsets.all(16),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: 0.74,
-                        ),
-                        itemCount: _searchedMultipleItems.length,
-                        itemBuilder: (context, index) {
-                          final sub = _searchedMultipleItems[index];
-                          final barcode = sub['fair_barcode']?.toString() ?? '';
-                          final isSelected = _selectedSubBarcodes.contains(barcode);
-                          final qty = _subBarcodeQuantities[barcode] ?? 1;
-                          final stock = sub['stock'] ?? 0;
-                          final isOutOfStock = stock <= 0;
-                          final color = sub['fair_colour'] != null ? 'Col: ${sub['fair_colour']}' : 'No Color';
-                          final selectedSizes = _subBarcodeSelectedSizes[barcode] ?? {};
+                      child: StatefulBuilder(
+                        builder: (context, setPopupStateInner) {
+                          final inStockSubItems = _searchedMultipleItems
+                              .where((sub) => (sub['stock'] ?? 0) > 0)
+                              .toList();
 
-                          return Card(
-                            elevation: isSelected ? 3 : 0.5,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              side: BorderSide(
-                                  color: isSelected ? primaryColor : Colors.grey.shade200,
-                                  width: isSelected ? 2 : 1,
+                          if (inStockSubItems.isEmpty) {
+                            return Center(
+                              child: Text(
+                                'All sub-barcodes are out of stock.',
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
+                            );
+                          }
+
+                          return GridView.builder(
+                            padding: const EdgeInsets.all(8),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 3,
+                              crossAxisSpacing: 6,
+                              mainAxisSpacing: 6,
+                              childAspectRatio: 2.2,
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(10.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          barcode,
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                      SizedBox(
-                                        width: 24,
-                                        height: 24,
-                                        child: Checkbox(
-                                          activeColor: primaryColor,
-                                          value: isSelected && !isOutOfStock,
-                                          onChanged: isOutOfStock
-                                              ? null
-                                              : (val) {
-                                                  setPopupState(() {
-                                                    if (val == true) {
-                                                      _selectedSubBarcodes.add(barcode);
-                                                    } else {
-                                                      _selectedSubBarcodes.remove(barcode);
-                                                    }
-                                                  });
-                                                },
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  Text(color, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                                  Text('MRP: ₹${sub['fair_mrp'] ?? 'N/A'}', style: const TextStyle(fontSize: 12)),
-                                  Text(
-                                    isOutOfStock ? 'Out of Stock' : 'Stock: $stock',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: isOutOfStock ? Colors.red.shade700 : Colors.blue.shade800,
-                                      fontWeight: FontWeight.w600,
+                            itemCount: inStockSubItems.length,
+                            itemBuilder: (context, index) {
+                              final sub = inStockSubItems[index];
+                              final barcode = sub['fair_barcode']?.toString() ?? '';
+                              final isSelected = _selectedSubBarcodes.contains(barcode);
+                              final qty = _subBarcodeQuantities[barcode] ?? 1;
+                              final stock = sub['stock'] ?? 0;
+                              final colorVal = sub['fair_colour']?.toString() ?? 'No Color';
+
+                              return GestureDetector(
+                                onTap: () {
+                                  setPopupState(() {
+                                    if (isSelected) {
+                                      _selectedSubBarcodes.remove(barcode);
+                                    } else {
+                                      _selectedSubBarcodes.add(barcode);
+                                    }
+                                  });
+                                },
+                                child: Card(
+                                  elevation: isSelected ? 2 : 0.5,
+                                  margin: EdgeInsets.zero,
+                                  color: isSelected ? primaryColor : null,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                    side: BorderSide(
+                                      color: isSelected ? primaryColor : Colors.grey.shade200,
+                                      width: isSelected ? 1.5 : 1,
                                     ),
                                   ),
-                                  const SizedBox(height: 6),
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: OutlinedButton.icon(
-                                      onPressed: isOutOfStock
-                                          ? null
-                                          : () {
-                                              _showSizesDialog(
-                                                context: context,
-                                                title: barcode,
-                                                dressType: sub['fair_dress_type'],
-                                                selectedSizes: selectedSizes,
-                                                setParentState: (fn) {
-                                                  setPopupState(fn);
-                                                  _subBarcodeSelectedSizes[barcode] = selectedSizes;
-                                                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                                                    _barcodeFocusNode.unfocus();
-                                                  });
-                                                },
-                                              );
-                                            },
-                                      icon: const Icon(Icons.checkroom, size: 12),
-                                      label: Text(
-                                        selectedSizes.isEmpty ? 'Select Sizes' : 'Sizes (${selectedSizes.length})',
-                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                      ),
-                                      style: OutlinedButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        minimumSize: const Size(0, 28),
-                                        foregroundColor: primaryColor,
-                                        side: BorderSide(color: primaryColor.withValues(alpha: 0.5)),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                                      ),
-                                    ),
+                                  child: Padding(
+                                    padding: isSelected
+                                        ? const EdgeInsets.only(left: 8.0, top: 4.0, bottom: 4.0, right: 6.0)
+                                        : const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+                                    child: isSelected
+                                        ? Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  mainAxisAlignment: MainAxisAlignment.center,
+                                                  children: [
+                                                    Text(
+                                                      colorVal,
+                                                      style: const TextStyle(
+                                                        fontWeight: FontWeight.bold,
+                                                        fontSize: 15,
+                                                        color: Colors.white,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      '(S: $stock)',
+                                                      style: const TextStyle(
+                                                        fontSize: 11,
+                                                        color: Colors.white70,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  GestureDetector(
+                                                    behavior: HitTestBehavior.opaque,
+                                                    onTap: () {
+                                                      if (qty > 1) {
+                                                        setPopupState(() {
+                                                          _subBarcodeQuantities[barcode] = qty - 1;
+                                                        });
+                                                      }
+                                                    },
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(3),
+                                                      decoration: BoxDecoration(
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(color: Colors.white54, width: 0.8),
+                                                      ),
+                                                      child: const Icon(
+                                                        Icons.remove,
+                                                        size: 11,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  Padding(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                                                    child: Text(
+                                                      '$qty',
+                                                      style: const TextStyle(
+                                                        fontWeight: FontWeight.bold,
+                                                        fontSize: 17,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  GestureDetector(
+                                                    behavior: HitTestBehavior.opaque,
+                                                    onTap: () {
+                                                      if (qty < stock) {
+                                                        setPopupState(() {
+                                                          _subBarcodeQuantities[barcode] = qty + 1;
+                                                        });
+                                                      } else {
+                                                        ScaffoldMessenger.of(context).showSnackBar(
+                                                          SnackBar(
+                                                            content: Text('Cannot exceed available stock of $stock'),
+                                                            duration: const Duration(seconds: 1),
+                                                          ),
+                                                        );
+                                                      }
+                                                    },
+                                                    child: Container(
+                                                      padding: const EdgeInsets.all(3),
+                                                      decoration: BoxDecoration(
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(color: Colors.white54, width: 0.8),
+                                                      ),
+                                                      child: const Icon(
+                                                        Icons.add,
+                                                        size: 11,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          )
+                                        : Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                colorVal,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: Colors.black87,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                '(S: $stock)',
+                                                style: TextStyle(
+                                                  fontSize: 13,
+                                                  color: Colors.grey.shade700,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                   ),
-                                  const Spacer(),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      GestureDetector(
-                                        onTap: isOutOfStock
-                                            ? null
-                                            : () {
-                                                if (qty > 1) {
-                                                  setPopupState(() {
-                                                    _subBarcodeQuantities[barcode] = qty - 1;
-                                                  });
-                                                }
-                                              },
-                                        child: Container(
-                                          padding: const EdgeInsets.all(4),
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            border: Border.all(color: isOutOfStock ? Colors.grey.shade300 : Colors.grey),
-                                          ),
-                                          child: Icon(
-                                            Icons.remove, 
-                                            size: 14, 
-                                            color: isOutOfStock ? Colors.grey.shade300 : Colors.black,
-                                          ),
-                                        ),
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                                        child: Text(
-                                          isOutOfStock ? '0' : '$qty',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: isOutOfStock ? Colors.grey.shade400 : Colors.black,
-                                          ),
-                                        ),
-                                      ),
-                                      GestureDetector(
-                                        onTap: isOutOfStock
-                                            ? null
-                                            : () {
-                                                setPopupState(() {
-                                                  _subBarcodeQuantities[barcode] = qty + 1;
-                                                });
-                                              },
-                                        child: Container(
-                                          padding: const EdgeInsets.all(4),
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            border: Border.all(color: isOutOfStock ? Colors.grey.shade300 : Colors.grey),
-                                          ),
-                                          child: Icon(
-                                            Icons.add, 
-                                            size: 14, 
-                                            color: isOutOfStock ? Colors.grey.shade300 : Colors.black,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            ),
+                                ),
+                              );
+                            },
                           );
                         },
                       ),
@@ -1510,196 +1738,193 @@ class _OrderEditPageState extends State<OrderEditPage> {
       itemCount: _addedItems.length,
       itemBuilder: (context, index) {
         final item = _addedItems[index];
-        final isMultiple = item['fair_order_sub_barcode_type'] == 'M';
+        final barcode = item['fair_order_sub_barcode']?.toString() ?? '';
+        final isCardSelected = _selectedOrderBarcodes.contains(barcode);
 
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.grey.shade200, width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.03),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+        return GestureDetector(
+          onTap: () {
+            setState(() {
+              if (isCardSelected) {
+                _selectedOrderBarcodes.remove(barcode);
+              } else {
+                _selectedOrderBarcodes.add(barcode);
+              }
+            });
+          },
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isCardSelected ? AppTheme.primaryColor : Colors.grey.shade200,
+                width: isCardSelected ? 2 : 1,
               ),
-            ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Top Row: Avatar, Barcode, Style/MRP, Delete Button
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: isMultiple ? Colors.purple.shade50 : Colors.blue.shade50,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(
-                        isMultiple ? Icons.grid_view : Icons.sell,
-                        color: isMultiple ? Colors.purple.shade700 : Colors.blue.shade700,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item['fair_order_sub_barcode'],
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              color: Colors.black87,
-                            ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.02),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+              child: Row(
+                children: [
+                  // 1. Barcode and Stock
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Text(
+                          item['fair_order_sub_barcode'],
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: Colors.black87,
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'MRP: ₹${item['fair_order_sub_mrp'] ?? 'N/A'} | Style: ${item['fair_order_sub_barcode_main']}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey.shade600,
-                              fontWeight: FontWeight.w500,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+
+                  // 2. Sizes Selector
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      final Set<String> currentSizes = Set<String>.from(item['sizes'] ?? {});
+                      _showSizesDialog(
+                        context: context,
+                        title: item['fair_order_sub_barcode'],
+                        dressType: item['fair_order_sub_dress_type'],
+                        selectedSizes: currentSizes,
+                        setParentState: (fn) {
+                          setState(() {
+                            fn();
+                            item['sizes'] = currentSizes;
+                          });
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            _barcodeFocusNode.unfocus();
+                          });
+                        },
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: Colors.grey.shade300),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.checkroom, size: 12, color: Colors.black54),
+                          const SizedBox(width: 3),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 80),
+                            child: Text(
+                              (item['sizes'] as Set<String>?) == null || (item['sizes'] as Set<String>).isEmpty
+                                  ? 'Sizes'
+                                  : (item['sizes'] as Set<String>).join(","),
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.black54,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline, color: Colors.red, size: 22),
-                      onPressed: () => _removeItem(index),
-                    ),
-                  ],
-                ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12.0),
-                  child: Divider(height: 1, thickness: 1),
-                ),
-                // Bottom Row: Sizes Selector and Quantity Stepper
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // Sizes Selector
-                    Expanded(
-                      child: GestureDetector(
+                  ),
+                  const SizedBox(width: 8),
+
+                  // 3. Quantity Stepper
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
                         onTap: () {
-                          final Set<String> currentSizes = Set<String>.from(item['sizes'] ?? {});
-                          _showSizesDialog(
-                            context: context,
-                            title: item['fair_order_sub_barcode'],
-                            dressType: item['fair_order_sub_dress_type'],
-                            selectedSizes: currentSizes,
-                            setParentState: (fn) {
-                              setState(() {
-                                fn();
-                                item['sizes'] = currentSizes;
-                              });
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                _barcodeFocusNode.unfocus();
-                              });
-                            },
-                          );
+                          final currentQty = item['fair_order_sub_quantity'] as int;
+                          if (currentQty > 1) {
+                            setState(() {
+                              item['fair_order_sub_quantity'] = currentQty - 1;
+                            });
+                          } else {
+                            _removeItem(index);
+                          }
                         },
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
-                            color: Colors.grey.shade50,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.grey.shade200),
+                            shape: BoxShape.circle,
+                            color: Colors.grey.shade100,
+                            border: Border.all(color: Colors.grey.shade300),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.checkroom, size: 14, color: Colors.black54),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  (item['sizes'] as Set<String>?) == null || (item['sizes'] as Set<String>).isEmpty
-                                      ? 'Select Sizes'
-                                      : 'Sizes: ${(item['sizes'] as Set<String>).join(", ")}',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black54,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
+                          child: const Icon(Icons.remove, size: 12, color: Colors.black87),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: SizedBox(
+                          width: 18,
+                          child: Text(
+                            '${item['fair_order_sub_quantity']}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: Colors.black87,
+                            ),
+                            textAlign: TextAlign.center,
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    // Quantity Stepper
-                    Row(
-                      children: [
-                        GestureDetector(
-                          onTap: () {
-                            final currentQty = item['fair_order_sub_quantity'] as int;
-                            if (currentQty > 1) {
-                              setState(() {
-                                item['fair_order_sub_quantity'] = currentQty - 1;
-                              });
-                            } else {
-                              _removeItem(index);
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.grey.shade100,
-                              border: Border.all(color: Colors.grey.shade300),
-                            ),
-                            child: const Icon(Icons.remove, size: 14, color: Colors.black87),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: SizedBox(
-                            width: 24,
-                            child: Text(
-                              '${item['fair_order_sub_quantity']}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
-                                color: Colors.black87,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () {
-                            final currentQty = item['fair_order_sub_quantity'] as int;
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          final currentQty = item['fair_order_sub_quantity'] as int;
+                          final stock = item['stock'] as int? ?? 0;
+                          if (currentQty < stock) {
                             setState(() {
                               item['fair_order_sub_quantity'] = currentQty + 1;
                             });
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.grey.shade100,
-                              border: Border.all(color: Colors.grey.shade300),
-                            ),
-                            child: const Icon(Icons.add, size: 14, color: Colors.black87),
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Cannot exceed available stock of $stock'),
+                                duration: const Duration(seconds: 1),
+                              ),
+                            );
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.grey.shade100,
+                            border: Border.all(color: Colors.grey.shade300),
                           ),
+                          child: const Icon(Icons.add, size: 12, color: Colors.black87),
                         ),
-                      ],
-                    ),
-                  ],
-                ),
-              ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 4),
+
+                  // 4. Delete/Trash Button
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: const Icon(Icons.delete_outline, color: Colors.red, size: 18),
+                    onPressed: () => _removeItem(index),
+                  ),
+                ],
+              ),
             ),
           ),
         );
